@@ -282,4 +282,78 @@ contract PandaNFTTest is Test {
         assertTrue(pandaNFT.supportsInterface(0x5b5e139f));
         assertTrue(pandaNFT.supportsInterface(0x2a55205a));
     }
+
+    function testSetDefaultRoyaltyRejectsZeroReceiverAndExcessFee() public {
+        vm.expectRevert();
+        pandaNFT.setDefaultRoyalty(address(0), 500);
+
+        vm.expectRevert();
+        pandaNFT.setDefaultRoyalty(royaltyReceiver, 10_001);
+    }
+
+    function testSetTokenRoyaltyRejectsZeroReceiverAndExcessFee() public {
+        uint256 mintPrice = pandaNFT.mintPrice();
+
+        vm.prank(user);
+        uint256 tokenId = pandaNFT.mint{value: mintPrice}(TOKEN_URI);
+
+        vm.expectRevert();
+        pandaNFT.setTokenRoyalty(tokenId, address(0), 500);
+
+        vm.expectRevert();
+        pandaNFT.setTokenRoyalty(tokenId, royaltyReceiver, 10_001);
+    }
+
+    function testWithdrawRevertsWhenOwnerCannotReceiveETH() public {
+        RejectingPandaOwner rejectingOwner = new RejectingPandaOwner();
+        PandaNFT ownedPandaNFT = rejectingOwner.pandaNFT();
+        uint256 mintPrice = ownedPandaNFT.mintPrice();
+
+        vm.deal(user, mintPrice);
+        vm.prank(user);
+        ownedPandaNFT.mint{value: mintPrice}(TOKEN_URI);
+
+        vm.expectRevert(PandaNFT.WithdrawFailed.selector);
+        rejectingOwner.withdraw();
+    }
+
+    function testFuzzOwnerCanSetMintPriceAndMint(uint96 newPriceRaw) public {
+        uint256 newPrice = bound(uint256(newPriceRaw), 1 wei, 100 ether);
+        pandaNFT.setMintPrice(newPrice);
+
+        vm.deal(user, newPrice);
+        vm.prank(user);
+        uint256 tokenId = pandaNFT.mint{value: newPrice}(TOKEN_URI);
+
+        assertEq(tokenId, 1);
+        assertEq(pandaNFT.ownerOf(tokenId), user);
+        assertEq(address(pandaNFT).balance, newPrice);
+    }
+
+    function testFuzzDefaultRoyalty(uint96 royaltyBpsRaw, uint96 salePriceRaw) public {
+        uint96 royaltyBps = uint96(bound(uint256(royaltyBpsRaw), 0, 10_000));
+        uint256 salePrice = bound(uint256(salePriceRaw), 1 wei, 1_000 ether);
+
+        pandaNFT.setDefaultRoyalty(royaltyReceiver, royaltyBps);
+        (address receiver, uint256 royaltyAmount) = pandaNFT.royaltyInfo(1, salePrice);
+
+        assertEq(receiver, royaltyReceiver);
+        assertEq(royaltyAmount, salePrice * royaltyBps / 10_000);
+    }
+}
+
+contract RejectingPandaOwner {
+    PandaNFT public immutable pandaNFT;
+
+    constructor() {
+        pandaNFT = new PandaNFT();
+    }
+
+    function withdraw() external {
+        pandaNFT.withdraw();
+    }
+
+    receive() external payable {
+        revert("reject eth");
+    }
 }
